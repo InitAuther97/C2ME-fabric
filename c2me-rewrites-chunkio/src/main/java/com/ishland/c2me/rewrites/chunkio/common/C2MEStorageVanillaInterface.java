@@ -51,7 +51,7 @@ public class C2MEStorageVanillaInterface extends StorageIoWorker implements IDir
         return this.backend.scheduleSave(
                 pos.toLong(),
                 nbt == null ? Maybe.empty() : Maybe.just(Either.left(nbt))
-        ).<Void>toCompletionStage(null).toCompletableFuture();
+        ).onErrorComplete(WriteCache.OUTDATED::equals).<Void>toCompletionStage(null).toCompletableFuture();
     }
 
     @Override
@@ -59,7 +59,7 @@ public class C2MEStorageVanillaInterface extends StorageIoWorker implements IDir
         return this.backend.scheduleSave(
                 pos.toLong(),
                 StoragePool.awaitVirtually(nbtSupplier) // nonblocking write
-        ).<Void>toCompletionStage(null).toCompletableFuture();
+        ).onErrorComplete(WriteCache.OUTDATED::equals).<Void>toCompletionStage(null).toCompletableFuture();
     }
 
     @Override
@@ -67,7 +67,7 @@ public class C2MEStorageVanillaInterface extends StorageIoWorker implements IDir
         return this.backend.scheduleSave(
                 pos.toLong(),
                 Maybe.just(data)
-        );
+        ).onErrorComplete(WriteCache.OUTDATED::equals);
     }
 
     @Override

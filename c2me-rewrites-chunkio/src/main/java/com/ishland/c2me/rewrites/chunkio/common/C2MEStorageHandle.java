@@ -34,9 +34,9 @@ public class C2MEStorageHandle implements Runnable {
     private final Long2ReferenceLinkedOpenHashMap<WriteCache> cache = new Long2ReferenceLinkedOpenHashMap<>();
 
     private final Semaphore sync = new Semaphore(0);
-    private final Queue<Runnable> pendingTasks = new ConcurrentLinkedQueue<>();
+    private final Queue<Runnable> pendingTasks = TheSpeedyObjectFactory.INSTANCE.newMPSCQueue();
     private final Executor executor = task -> {
-        pendingTasks.offer(task);
+        pendingTasks.add(task);
         sync.release();
     };
     private final Scheduler storageScheduler = Schedulers.from(executor);
@@ -221,7 +221,8 @@ public class C2MEStorageHandle implements Runnable {
                 })
                 .flatMapCompletable(it -> scheduleChunkWrite(pos, it))
                 .doOnEvent(it -> {
-                    if (it != WriteCache.OUTDATED) this.cache.remove(pos);
+                    if (it == WriteCache.OUTDATED) return;
+                    this.cache.remove(pos);
                 });
     }
 
