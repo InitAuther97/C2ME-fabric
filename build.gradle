@@ -94,6 +94,7 @@ configure (allprojects - project(":tests")) {
         runs {
             server {
                 ideConfigGenerated project.rootProject == project
+                vmArgs "-XX:+UseZGC", "-XX:+UseCompactObjectHeaders", "-XX:+AlwaysPreTouch"
             }
             client {
                 ideConfigGenerated project.rootProject == project

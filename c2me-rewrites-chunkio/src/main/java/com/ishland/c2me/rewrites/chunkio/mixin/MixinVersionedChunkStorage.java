@@ -19,7 +19,7 @@ public class MixinVersionedChunkStorage {
         if (this instanceof IVanillaChunkManager vanillaChunkManager) {
             return new C2MEStorageVanillaInterface(arg, path, bl, pos -> vanillaChunkManager.c2me$getSchedulingManager().positionedExecutor(pos));
         } else {
-            return new C2MEStorageVanillaInterface(arg, path, bl, null);
+            return new C2MEStorageVanillaInterface(arg, path, bl);
         }
     }
 

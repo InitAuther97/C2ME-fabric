@@ -1,14 +1,11 @@
 package com.ishland.c2me.base.common.theinterface;
 
+import com.ibm.asyncutil.util.Either;
+import io.reactivex.rxjava3.core.Completable;
+import net.minecraft.nbt.NbtCompound;
 import net.minecraft.util.math.ChunkPos;
-
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 
 public interface IDirectStorage {
 
-    public CompletableFuture<Void> setRawChunkData(ChunkPos pos, byte[] data);
-
-    public CompletableFuture<Void> setRawChunkData(ChunkPos pos, CompletableFuture<byte[]> data);
-
+    Completable setRawChunkData(ChunkPos pos, Either<NbtCompound, byte[]> data);
 }

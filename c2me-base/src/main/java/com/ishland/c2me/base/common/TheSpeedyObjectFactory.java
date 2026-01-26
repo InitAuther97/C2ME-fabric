@@ -1,4 +1,4 @@
-package com.ishland.c2me.rewrites.chunksystem.common;
+package com.ishland.c2me.base.common;
 
 import com.ishland.flowsched.scheduler.ObjectFactory;
 import io.netty.util.internal.PlatformDependent;
