@@ -182,8 +182,8 @@ public class C2MEStorageHandle implements Runnable {
                 .flatMapSingle(either ->
                         either.fold(
                                 Single::just,
-                                data -> Single.fromCallable(() -> NbtIo.readCompound(new DataInputStream(new ByteArrayInputStream(data))))
-                        ).subscribeOn(prioritizedScheduler.apply(pos)))
+                                data -> Single.fromCallable(() -> NbtIo.readCompound(new DataInputStream(new ByteArrayInputStream(data)))).subscribeOn(prioritizedScheduler.apply(pos))
+                        ))
                 .switchIfEmpty(Maybe.defer(() -> scheduleChunkRead(pos)));
     }
 

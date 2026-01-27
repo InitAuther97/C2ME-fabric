@@ -8,8 +8,6 @@ import org.jetbrains.annotations.NotNull;
 
 public class WriteCache {
 
-    private static final Exception UNINITIALIZED = new IllegalStateException("Write cache is not initialized");
-    private static final Exception CONSUMED = new IllegalStateException("Write cache is already consumed");
     static final Exception OUTDATED = new Exception("Future is outdated");
 
     final ChunkPos pos;
