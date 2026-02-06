@@ -227,15 +227,13 @@ public class ReadFromDisk extends NewChunkStatus {
             ChunkPos chunkPos = chunk.getPos();
 
             SerializedChunk serializer = SerializedChunk.fromChunk(((IThreadedAnvilChunkStorage) context.tacs()).getWorld(), chunk);
-            return Single
-                    .fromCallable(() -> {
+            return ((IDirectStorage) ((IVersionedChunkStorage) context.tacs()).getWorker()).setRawChunkData(chunkPos,
+                    Single.fromCallable(() -> {
                         try (var ignored = ThreadInstrumentation.getCurrent().begin(new ChunkTaskWork(context, this, false))) {
                             return SerializerAccess.getSerializer().serialize(serializer);
                         }
                     })
-                    .subscribeOn(Schedulers.from(GlobalExecutors.prioritizedScheduler.executor(16) /* boost priority as we are serializing an unloaded chunk */))
-                    .flatMapCompletable(either ->
-                        ((IDirectStorage) ((IVersionedChunkStorage) context.tacs()).getWorker()).setRawChunkData(chunkPos, either));
+                    .subscribeOn(Schedulers.from(GlobalExecutors.prioritizedScheduler.executor(16) /* boost priority as we are serializing an unloaded chunk */)));
         }
     }
 

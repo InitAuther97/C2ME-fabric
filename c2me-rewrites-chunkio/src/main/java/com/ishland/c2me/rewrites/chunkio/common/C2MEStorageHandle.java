@@ -1,57 +1,75 @@
 package com.ishland.c2me.rewrites.chunkio.common;
 
+import com.google.common.base.Preconditions;
 import com.ibm.asyncutil.util.Either;
 import com.ishland.c2me.base.common.TheSpeedyObjectFactory;
-import com.ishland.c2me.base.mixin.access.IRegionBasedStorage;
+import com.ishland.flowsched.util.Assertions;
+import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.*;
-import io.reactivex.rxjava3.schedulers.Schedulers;
+import io.reactivex.rxjava3.disposables.Disposable;
 import it.unimi.dsi.fastutil.longs.Long2ReferenceLinkedOpenHashMap;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtIo;
-import net.minecraft.nbt.NbtSizeTracker;
-import net.minecraft.nbt.scanner.NbtScanner;
-import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.storage.*;
+import org.jctools.queues.MessagePassingQueue;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayInputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
-import java.util.Queue;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.LongFunction;
 
-public class C2MEStorageHandle implements Runnable {
+public class C2MEStorageHandle implements Runnable, MessagePassingQueue.Consumer<StorageRequest>, AutoCloseable {
 
     static final Logger LOGGER = LoggerFactory.getLogger("C2ME Storage");
 
     private final RegionBasedStorage storage;
-    private final LongFunction<Scheduler> prioritizedScheduler;
-    private final Scheduler ioScheduler;
-    private final Long2ReferenceLinkedOpenHashMap<WriteCache> cache = new Long2ReferenceLinkedOpenHashMap<>();
+    private final Long2ReferenceLinkedOpenHashMap<DataCache> cache = new Long2ReferenceLinkedOpenHashMap<>();
 
-    private final Semaphore sync = new Semaphore(0);
-    private final Queue<Runnable> pendingTasks = TheSpeedyObjectFactory.INSTANCE.newMPSCQueue();
-    private final Executor executor = task -> {
-        pendingTasks.add(task);
-        sync.release();
-    };
-    private final Scheduler storageScheduler = Schedulers.from(executor);
+    private final LongFunction<Executor> prioritizedExecutor;
+    private final Executor ioExecutor;
 
+    private Thread carrier;
+    private final MessagePassingQueue<StorageRequest> pendingTasks;
+
+    // Cold fields that are only changed by worker thread
     private boolean closing = false;
-    private CompletableEmitter flush;
+    List<StorageRequest.FlushRequest> flushRequests = new ArrayList<>(1);
 
-    public C2MEStorageHandle(RegionBasedStorage storage, Scheduler backgroundScheduler) {
-        this(storage, backgroundScheduler, unused -> backgroundScheduler);
+    // Pre padding for hot field
+    @SuppressWarnings("unused")
+    private final int i0 = 0, i1 = 0, i2 = 0, i3 = 0,
+            i4 = 0, i5 = 0, i6 = 0, i7 = 0,
+            i8 = 0, i9 = 0, iA = 0, iB = 0,
+            iC = 0, iD = 0, iE = 0, iF = 0;
+
+    @SuppressWarnings("unused")
+    private volatile int taskCount;
+
+    // Post padding for hot field
+    @SuppressWarnings("unused")
+    private final int i10 = 0, i11 = 0, i12 = 0, i13 = 0,
+            i14 = 0, i15 = 0, i16 = 0, i17 = 0,
+            i18 = 0, i19 = 0, i1A = 0, i1B = 0,
+            i1C = 0, i1D = 0, i1E = 0, i1F = 0;
+
+    public C2MEStorageHandle(RegionBasedStorage storage, Executor backgroundExecutor) {
+        this(storage, backgroundExecutor, _ -> backgroundExecutor);
     }
 
-    public C2MEStorageHandle(RegionBasedStorage storage, Scheduler ioScheduler, LongFunction<Scheduler> prioritizedScheduler) {
+    public C2MEStorageHandle(RegionBasedStorage storage, Executor ioExecutor, LongFunction<Executor> prioritizedExecutor) {
+        final var queue = TheSpeedyObjectFactory.INSTANCE.<StorageRequest>newMPSCQueue();
+        Preconditions.checkArgument(queue instanceof MessagePassingQueue<?>, "MPSC queue is not MessagePassingQueue");
+        this.pendingTasks = (MessagePassingQueue<StorageRequest>) queue;
         this.storage = storage;
-        this.ioScheduler = ioScheduler;
-        this.prioritizedScheduler = prioritizedScheduler;
+        this.ioExecutor = ioExecutor;
+        this.prioritizedExecutor = prioritizedExecutor;
     }
 
     @Override
@@ -59,241 +77,223 @@ public class C2MEStorageHandle implements Runnable {
         return String.format("C2MEStorageHandle[%s]", this.storage.getStorageKey());
     }
 
+    public void initCarrier() {
+        Assertions.assertTrue(this.carrier == null, "Carrier already initialized");
+        this.carrier = Thread.currentThread();
+    }
+
     @Override
     public void run() {
-        while (!closing) {
-            try {
-                sync.acquire();
-            } catch (InterruptedException e) {
-                LOGGER.warn("Ignoring interruption while waiting for tasks", e);
-                continue;
-            }
-            int count = 0;
-            Runnable work;
-            while ((work = pendingTasks.poll()) != null) {
-                work.run();
-                count++;
-            }
-            if (count == 0) {
-                LOGGER.warn("Received redundant task permit");
-                continue;
-            } else if (count != 1) {
-                sync.acquireUninterruptibly(count - 1);
-            }
-            final var flush = this.flush;
-            if (flush != null && this.cache.isEmpty()) {
-                flush.onComplete();
-                this.flush = null;
-            }
-        }
         try {
-            this.storage.close();
+            while (!closing) {
+                if (0 >= (int) VH_COUNT.getVolatile(this)) {
+                    LockSupport.park(this);
+                    if (Thread.interrupted()) {
+                        LOGGER.warn("Ignored interruption when waiting for tasks");
+                    }
+                }
+                final int count = pendingTasks.drain(this);
+                if (count == 0) continue;
+                VH_COUNT.getAndAddRelease(this, -count);
+            }
+            LOGGER.info("Storage {} finished execution", this);
         } catch (Throwable t) {
-            LOGGER.error("Error closing storage", t);
+            LOGGER.error("Storage {} crashed", this, t);
+            for (StorageRequest.FlushRequest flushRequest : flushRequests) {
+                flushRequest.callback.tryOnError(t);
+            }
         }
     }
 
-    private boolean hasPendingTasks() {
-        return !this.pendingTasks.isEmpty() || !this.cache.isEmpty();
+    public void enqueue(@NotNull StorageRequest pending) {
+        final int count = (int) VH_COUNT.getAndAddRelease(this, 1);
+        pendingTasks.offer(pending);
+        if (count == 0) {
+            LockSupport.unpark(carrier);
+        }
+    }
+
+    @Override
+    public void accept(StorageRequest e) {
+        e.accept(this);
     }
 
     public StorageKey getStorageKey() {
         return this.storage.getStorageKey();
     }
 
-    private Completable internalFlush(boolean sync) {
-        final var flush = Completable
-                .create(emitter -> this.flush = emitter)
-                .subscribeOn(storageScheduler);
-        if (sync) {
-            return flush.doOnComplete(storage::sync);
-        }
-        return flush;
-    }
-
-    public CompletableFuture<Void> flush(boolean sync) {
-        return internalFlush(sync)
-                .<Void>toCompletionStage(null)
-                .toCompletableFuture();
-    }
-
+    @Override
     public void close() {
-        internalFlush(true)
-                .doOnComplete(() -> this.closing = true)
-                .subscribe();
+        this.closing = true;
     }
 
-    /**
-     * Read chunk data from storage
-     * @param pos target pos
-     * @param scanner if null then ignored, if non-null then used and produce null future
-     * @return future
-     */
-    public CompletableFuture<NbtCompound> getChunkData(long pos, NbtScanner scanner) {
-        if (this.closing) {
-            return CompletableFuture.failedFuture(new CancellationException());
+    public Executor io() {
+        return ioExecutor;
+    }
+
+    public Executor prioritized(long pos) {
+        return prioritizedExecutor.apply(pos);
+    }
+
+    public void processFlushRequest(StorageRequest.FlushRequest request) {
+        if (this.cache.isEmpty()) {
+            request.callback.onComplete();
+            return;
         }
-//        future.thenApply(Function.identity()).orTimeout(60, TimeUnit.SECONDS).exceptionally(throwable -> {
-//            if (throwable instanceof TimeoutException) {
-//                LOGGER.warn("Chunk read at pos {} took too long (> 1min)", new ChunkPos(pos).toLong());
-//            }
-//            return null;
-//        });
-        return scanner == null ?
-                this.read0(pos).toCompletionStage(null).toCompletableFuture() :
-                this.scan0(pos, scanner).<NbtCompound>toCompletionStage(null).toCompletableFuture();
+        request.poses.addAll(this.cache.keySet());
+        this.flushRequests.add(request);
     }
 
-    private Maybe<Either<NbtCompound, byte[]>> readFromCache0(long pos) {
-        return Single.just(this.cache)
-                .observeOn(storageScheduler)
-                .mapOptional(map -> Optional.ofNullable(map.get(pos)))
-                .flatMap(WriteCache::get)
-                .doOnError(unused -> {
-                    LOGGER.warn("Need to retry read of chunk {} because previous write to chunk threw an exception", new ChunkPos(pos));
-                    this.cache.remove(pos);
-                })
-                .onErrorComplete();
+    public DataCache getCache(long pos) {
+        return this.cache.get(pos);
     }
 
-    private Maybe<DataInputStream> readFromFile0(long pos) {
-        return Maybe.fromCallable(() -> {
-            final ChunkPos pos1 = new ChunkPos(pos);
-            final RegionFile regionFile = ((IRegionBasedStorage) this.storage).invokeGetRegionFile(pos1);
-            return regionFile.getChunkInputStream(pos1);
-        });
-    }
-
-    private Completable scan0(long pos, NbtScanner scanner) {
-        return readFromCache0(pos)
-                .switchIfEmpty(Maybe.defer(() -> scheduleChunkScan(pos, scanner).toMaybe()))
-                .flatMapCompletable(either ->
-                        either.fold(
-                                compound -> Completable.fromAction(() -> compound.accept(scanner)),
-                                data -> Completable.fromAction(() -> {
-                                    final DataInputStream input = new DataInputStream(new ByteArrayInputStream(data));
-                                    NbtIo.scan(input, scanner, NbtSizeTracker.ofUnlimitedBytes());
-                                })
-                        ).subscribeOn(prioritizedScheduler.apply(pos)));
-    }
-
-    private Maybe<NbtCompound> read0(long pos) {
-        return readFromCache0(pos)
-                .flatMapSingle(either ->
-                        either.fold(
-                                Single::just,
-                                data -> Single.fromCallable(() -> NbtIo.readCompound(new DataInputStream(new ByteArrayInputStream(data)))).subscribeOn(prioritizedScheduler.apply(pos))
-                        ))
-                .switchIfEmpty(Maybe.defer(() -> scheduleChunkRead(pos)));
-    }
-
-    private Maybe<NbtCompound> scheduleChunkRead(long pos) {
-        return readFromFile0(pos)
-                .flatMap(stream ->
-                        Maybe.fromCallable(() -> {
-                            try (DataInputStream stream1 = stream) {
-                                return NbtIo.readCompound(stream1);
-                            }
-                        }).subscribeOn(prioritizedScheduler.apply(pos))
-                );
-    }
-
-    private Completable scheduleChunkScan(long pos, NbtScanner scanner) {
-        return readFromFile0(pos)
-                .flatMapCompletable(stream ->
-                        Completable.fromAction(() -> {
-                            try (DataInputStream stream1 = stream) {
-                                NbtIo.scan(stream1, scanner, NbtSizeTracker.ofUnlimitedBytes());
-                            }
-                        }).subscribeOn(prioritizedScheduler.apply(pos))
-                );
-    }
-
-    public Completable scheduleSave(long pos, Maybe<Either<NbtCompound, byte[]>> nbt) {
-        return Single.just(nbt)
-                .observeOn(storageScheduler)
-                .map(it -> {
-                    final var newCache = new WriteCache(pos, it);
-                    var oldCache = this.cache.put(pos, newCache);
-                    if (oldCache != null) oldCache.cancel();
-                    newCache.state = WriteCache.State.AWAIT_DATA;
-                    return newCache;
-                })
-                .flatMapCompletable(it -> scheduleChunkWrite(pos, it))
-                .doOnEvent(it -> {
-                    if (it == WriteCache.OUTDATED) return;
-                    this.cache.remove(pos);
-                });
-    }
-
-    private Completable scheduleChunkWrite(long pos, WriteCache cache) {
-        return cache.get()
-                .observeOn(storageScheduler)
-                .switchIfEmpty(Completable.fromAction(() -> deleteChunk(pos, cache)).toMaybe())
-                .flatMapSingle(it -> serializeChunk(pos, cache, it).observeOn(storageScheduler))
-                .flatMapCompletable(dos -> saveChunk(cache, dos))
-                .doOnError(t -> {
-                    if (t != WriteCache.OUTDATED) {
-                        cache.state = WriteCache.State.DEAD;
-                        LOGGER.error("Error while saving chunk {} in {}", new ChunkPos(pos), this.getStorageKey(), t);
-                    }
-                });
-    }
-
-    private void deleteChunk(long pos, WriteCache cache) throws Exception {
-        if (cache.isCancelled()) {
-            throw WriteCache.OUTDATED;
+    public void setCache(long pos, DataCache data) {
+        var oldCache = this.cache.put(pos, data);
+        if (oldCache == null) {
+            return;
         }
+        oldCache.invalidate();
+        onCacheCompletion(pos);
+    }
 
-        cache.state = WriteCache.State.WRITING;
-        final ChunkPos pos1 = new ChunkPos(pos);
-        final RegionFile regionFile;
+    public void invalidateCache(long pos) {
+        final var oldCache = this.cache.remove(pos);
+        if (oldCache == null) {
+            return;
+        }
+        oldCache.invalidate();
+        onCacheCompletion(pos);
+    }
+
+    private void onCacheCompletion(long pos) {
+        final var iterator = flushRequests.iterator();
+        while (iterator.hasNext()) {
+            final var request = iterator.next();
+            request.poses.remove(pos);
+            if (!request.poses.isEmpty()) {
+                continue;
+            }
+            iterator.remove();
+            if (request.sync) {
+                try {
+                    this.storage.sync();
+                } catch (IOException e) {
+                    LOGGER.error("Failed to synchronize chunks", e);
+                    request.callback.tryOnError(e);
+                }
+            }
+            request.callback.onComplete();
+        }
+    }
+
+    public RegionBasedStorage accessStorage() {
+        return this.storage;
+    }
+
+    private static final VarHandle VH_COUNT;
+
+    static {
         try {
-            regionFile = ((IRegionBasedStorage) this.storage).invokeGetRegionFile(pos1);
-        } catch (IOException e) {
-            LOGGER.warn("Failed to get region file for chunk {}", pos1, e);
-            throw e;
-        }
-
-        try {
-            regionFile.delete(pos1);
-        } catch (IOException e) {
-            LOGGER.warn("Failed to remove existing data for chunk {}", pos1, e);
-            throw e;
+            VH_COUNT = MethodHandles.lookup().findVarHandle(C2MEStorageHandle.class, "taskCount", int.class);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
         }
     }
 
-    private Single<DataOutputStream> serializeChunk(long pos, WriteCache cache, Either<NbtCompound, byte[]> either) {
-        if (cache.isCancelled()) {
-            return Single.error(WriteCache.OUTDATED);
-        }
-        cache.state = WriteCache.State.AWAIT_WRITE;
-        final ChunkPos pos1 = new ChunkPos(pos);
-        final RegionFile regionFile;
-        final DataOutputStream dos;
-        try {
-            regionFile = ((IRegionBasedStorage) this.storage).invokeGetRegionFile(pos1);
-            dos = regionFile.getChunkOutputStream(pos1);
-        } catch (IOException e) {
-            LOGGER.warn("Failed to write chunk data for chunk {} in {}", pos1, this.storage.getStorageKey(), e);
-            return Single.error(e);
+    public static class DataCache implements MaybeObserver<Either<NbtCompound, byte[]>>, SingleObserver<Either<NbtCompound, byte[]>> {
+
+        private static final StorageRequest[] DISPOSED = new StorageRequest[0];
+
+        private Either<Optional<Either<NbtCompound, byte[]>>, Throwable> data;
+        private volatile StorageRequest[] pending;
+        boolean valid = true;
+        final C2MEStorageHandle handle;
+
+        public DataCache(C2MEStorageHandle handle) {
+            this.handle = handle;
+            this.pending = new StorageRequest[0];
         }
 
-        return Single.just(either)
-                .observeOn(ioScheduler)
-                .flatMapCompletable(it -> it.fold(
-                        compound -> Completable.fromAction(() -> NbtIo.writeCompound(compound, dos)),
-                        data -> Completable.fromAction(() -> dos.write(data))
-                ))
-                .toSingleDefault(dos);
+        public DataCache(C2MEStorageHandle handle, Either<NbtCompound, byte[]> data) {
+            this.handle = handle;
+            this.pending = DISPOSED;
+            this.data = Either.left(Optional.ofNullable(data));
+        }
+
+        public void invalidate() {
+            valid = false;
+        }
+
+        public boolean isValid() {
+            return valid; // This could be lazy because we don't set it to INVALIDATED async
+        }
+
+        @Override
+        public void onSubscribe(@NonNull Disposable d) {
+            // We never cancel
+        }
+
+        @Override
+        public void onSuccess(@NonNull Either<NbtCompound, byte[]> either) {
+            this.data = Either.left(Optional.of(either)); // Piggyback on pending write
+            onPublish();
+        }
+
+        @Override
+        public void onError(@NonNull Throwable e) {
+            this.data = Either.right(e);
+            onPublish();
+        }
+
+        @Override
+        public void onComplete() {
+            this.data = Either.left(Optional.empty());
+            onPublish();
+        }
+
+        private void onPublish() {
+            final var pending = (StorageRequest[]) VH_PENDING.getAndSetRelease(this, DISPOSED);
+            VarHandle.acquireFence();
+            Assertions.assertTrue(DISPOSED != pending, "Racing condition: multiple completion");
+            for (StorageRequest request : pending) {
+                handle.enqueue(request);
+            }
+        }
+
+        public Either<Optional<Either<NbtCompound, byte[]>>, Throwable> queueOrGet(StorageRequest request) {
+            final var provided = VH_PENDING.getAcquire(this);
+            if (provided == DISPOSED) {
+                // Piggyback on pending read
+                final var result = this.data;
+                Assertions.assertTrue(result != null, "Racing condition: data read is null after pending disposed");
+                return result;
+            }
+            final var appended = new StorageRequest[pending.length + 1];
+            System.arraycopy(pending, 0, appended, 0, pending.length);
+            appended[pending.length] = request;
+            if (DISPOSED != VH_PENDING.compareAndExchangeRelease(this, provided, appended)) {
+                return null;
+            }
+            VarHandle.acquireFence();
+            // Piggyback on pending read
+            final var result = this.data;
+            Assertions.assertTrue(result != null, "Racing condition: data read is null after pending disposed");
+            return result;
+        }
+
+        public Either<Optional<Either<NbtCompound, byte[]>>, Throwable> getNow() {
+            return data;
+        }
+
+        private static final VarHandle VH_PENDING;
+
+        static {
+            try {
+                VH_PENDING = MethodHandles.lookup().findVarHandle(DataCache.class, "pending", StorageRequest[].class);
+            } catch (NoSuchFieldException | IllegalAccessException e) {
+                throw new RuntimeException(e);
+            }
+        }
     }
-
-    private Completable saveChunk(WriteCache cache, DataOutputStream dos) {
-        if (cache.isCancelled()) {
-            return Completable.error(WriteCache.OUTDATED);
-        }
-        cache.state = WriteCache.State.WRITING;
-        return Completable.fromAction(dos::close);
-    }
-
 }

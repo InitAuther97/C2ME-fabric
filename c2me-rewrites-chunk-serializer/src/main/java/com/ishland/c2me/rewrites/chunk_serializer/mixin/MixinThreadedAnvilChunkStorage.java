@@ -100,7 +100,7 @@ public abstract class MixinThreadedAnvilChunkStorage extends VersionedChunkStora
             SerializedChunk chunkSerializer = SerializedChunk.fromChunk(this.world, chunk);
             //region start replaced code
             // NbtCompound nbtCompound = ChunkSerializer.serialize(this.world, chunk);
-            Single.fromCallable(() -> {
+            ((IDirectStorage) ((IVersionedChunkStorage) this).getWorker()).setRawChunkData(chunkPos, Single.fromCallable(() -> {
                 NbtWriter nbtWriter = new NbtWriter();
                 try {
                     nbtWriter.start(NbtElement.COMPOUND_TYPE);
@@ -112,14 +112,12 @@ public abstract class MixinThreadedAnvilChunkStorage extends VersionedChunkStora
                 } finally {
                     nbtWriter.release();
                 }
-            })
-                    .subscribeOn(Schedulers.from(((IVanillaChunkManager) this).c2me$getSchedulingManager().positionedExecutor(chunk.getPos().toLong())))
-                    .flatMapCompletable(either -> ((IDirectStorage) ((IVersionedChunkStorage) this).getWorker()).setRawChunkData(chunkPos, either))
-                    .doOnError(ex -> this.world.getServer().onChunkSaveFailure(ex, this.getStorageKey(), chunkPos))
-                    .doFinally(() -> this.chunksBeingSavedCount.decrementAndGet())
-                    .subscribe();
+            }).subscribeOn(Schedulers.from(((IVanillaChunkManager) this).c2me$getSchedulingManager().positionedExecutor(chunk.getPos().toLong()))))
+                    .subscribe(() -> this.chunksBeingSavedCount.decrementAndGet(), ex -> {
+                        this.world.getServer().onChunkSaveFailure(ex, this.getStorageKey(), chunkPos);
+                        this.chunksBeingSavedCount.decrementAndGet();
+                    });
             //endregion end replaced code
-
             this.mark(chunkPos, chunkStatus.getChunkType());
             return true;
         } catch (Exception var5) {

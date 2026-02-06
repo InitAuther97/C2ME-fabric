@@ -66,6 +66,7 @@ public class TheSpeedyObjectFactory implements ObjectFactory {
 
     @Override
     public <E> Queue<E> newMPSCQueue() {
+        // Hint: Must be MessagePassingQueue<E> from jctools
         return this.hasUnsafe ? new MpscUnboundedArrayQueue<>(1024) : new MpscUnboundedAtomicArrayQueue<>(1024);
     }
 }

@@ -6,7 +6,7 @@ import com.ishland.c2me.base.common.GlobalExecutors;
 import com.ishland.c2me.base.common.theinterface.IDirectStorage;
 import io.reactivex.rxjava3.core.Completable;
 import io.reactivex.rxjava3.core.Maybe;
-import io.reactivex.rxjava3.schedulers.Schedulers;
+import io.reactivex.rxjava3.core.Single;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.scanner.NbtScanner;
 import net.minecraft.util.math.ChunkPos;
@@ -25,71 +25,84 @@ import java.util.function.Supplier;
 public class C2MEStorageVanillaInterface extends StorageIoWorker implements IDirectStorage {
 
     private final C2MEStorageHandle backend;
-    private final CompletableFuture<?> backendFuture;
 
     public C2MEStorageVanillaInterface(StorageKey arg, Path path, boolean dsync) {
         super(arg, path, dsync);
         this.backend = new C2MEStorageHandle(
                 new RegionBasedStorage(arg, path, dsync),
-                Schedulers.from(GlobalExecutors.prioritizedScheduler.executor(16))
+                GlobalExecutors.prioritizedScheduler.executor(16)
         );
-        this.backendFuture = StoragePool.runStorage(this.backend);
+        StoragePool.runStorage(this.backend);
     }
 
     public C2MEStorageVanillaInterface(StorageKey arg, Path path, boolean dsync, LongFunction<Executor> prioritizedExecutor) {
         super(arg, path, dsync);
         this.backend = new C2MEStorageHandle(
                 new RegionBasedStorage(arg, path, dsync),
-                Schedulers.from(GlobalExecutors.prioritizedScheduler.executor(16)),
-                pos -> Schedulers.from(prioritizedExecutor.apply(pos))
+                GlobalExecutors.prioritizedScheduler.executor(16),
+                prioritizedExecutor
         );
-        this.backendFuture = StoragePool.runStorage(this.backend);
+        StoragePool.runStorage(this.backend);
     }
 
     @Override
     public CompletableFuture<Void> setResult(ChunkPos pos, @Nullable NbtCompound nbt) {
-        return this.backend.scheduleSave(
-                pos.toLong(),
-                nbt == null ? Maybe.empty() : Maybe.just(Either.left(nbt))
-        ).onErrorComplete(WriteCache.OUTDATED::equals).<Void>toCompletionStage(null).toCompletableFuture();
+        return Completable.create(emitter -> {
+            final var cache = new C2MEStorageHandle.DataCache(this.backend, Either.left(nbt));
+            StorageRequest.WriteRequest request = new StorageRequest.WriteRequest(emitter, pos, cache);
+            this.backend.enqueue(request);
+        }).<Void>toCompletionStage(null).toCompletableFuture();
     }
 
     @Override
     public CompletableFuture<Void> setResult(ChunkPos pos, Supplier<NbtCompound> nbtSupplier) {
-        return this.backend.scheduleSave(
-                pos.toLong(),
-                StoragePool.awaitVirtually(nbtSupplier) // nonblocking write
-        ).onErrorComplete(WriteCache.OUTDATED::equals).<Void>toCompletionStage(null).toCompletableFuture();
+        return Completable.create(emitter -> {
+            final var cache = new C2MEStorageHandle.DataCache(this.backend);
+            StorageRequest.WriteRequest request = new StorageRequest.WriteRequest(emitter, pos, cache);
+            StoragePool.awaitVirtually(nbtSupplier).subscribe(cache);
+            this.backend.enqueue(request);
+        }).<Void>toCompletionStage(null).toCompletableFuture();
     }
 
     @Override
-    public Completable setRawChunkData(ChunkPos pos, Either<NbtCompound, byte[]> data) {
-        return this.backend.scheduleSave(
-                pos.toLong(),
-                Maybe.just(data)
-        ).onErrorComplete(WriteCache.OUTDATED::equals);
+    public Completable setRawChunkData(ChunkPos pos, Single<Either<NbtCompound, byte[]>> data) {
+        return Completable.create(emitter -> {
+            final var cache = new C2MEStorageHandle.DataCache(this.backend);
+            StorageRequest.WriteRequest request = new StorageRequest.WriteRequest(emitter, pos, cache);
+            data.subscribe(cache);
+            this.backend.enqueue(request);
+        });
     }
 
     @Override
     public CompletableFuture<Optional<NbtCompound>> readChunkData(ChunkPos pos) {
-        return this.backend.getChunkData(pos.toLong(), null).thenApply(Optional::ofNullable);
+        return Maybe.<NbtCompound>create(emitter -> this.backend.enqueue(new StorageRequest.ReadRequest(emitter, pos)))
+                .map(Optional::of).toCompletionStage(Optional.empty()).toCompletableFuture();
     }
 
     @Override
     public CompletableFuture<Void> completeAll(boolean sync) {
-        return this.backend.flush(true).copy();
+        return Completable.create(emitter -> {
+            StorageRequest.FlushRequest request = new StorageRequest.FlushRequest(emitter, true); // Always sync
+            this.backend.enqueue(request);
+        }).<Void>toCompletionStage(null).toCompletableFuture();
     }
 
     @Override
     public CompletableFuture<Void> scanChunk(ChunkPos pos, NbtScanner scanner) {
         Preconditions.checkNotNull(scanner, "scanner");
-        return this.backend.getChunkData(pos.toLong(), scanner).thenRun(() -> {});
+        return Completable.create(emitter -> {
+            StorageRequest.ScanRequest request = new StorageRequest.ScanRequest(emitter, pos, scanner);
+            this.backend.enqueue(request);
+        }).<Void>toCompletionStage(null).toCompletableFuture();
     }
 
     @Override
     public void close() {
-        this.backend.close();
-        this.backendFuture.join();
+        Completable.create(emitter -> {
+            StorageRequest.FlushRequest request = new StorageRequest.FlushRequest(emitter, true); // Always sync
+            this.backend.enqueue(request);
+        }).blockingSubscribe(this.backend::close, _ -> this.backend.close());
     }
 
     @Override

@@ -7,7 +7,6 @@ import io.reactivex.rxjava3.core.Scheduler;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import net.minecraft.nbt.NbtCompound;
 
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Supplier;
@@ -19,25 +18,26 @@ public class StoragePool {
     static {
         final var selected = switch (ModuleEntryPoint.backend) {
             case "thread" -> Thread.ofPlatform().daemon();
-            case "vthread" -> Thread.ofVirtual();
+            case "vthread" -> Thread.ofVirtual(); // Virtual threads can only be daemon threads
             default -> throw new IllegalStateException("Unexpected value: " + ModuleEntryPoint.backend);
         };
         STORAGE_POOL = Executors.newThreadPerTaskExecutor(
                 selected.name("C2ME Storage #", 1).factory());
     }
 
-    public static CompletableFuture<?> runStorage(C2MEStorageHandle storage) {
-        return CompletableFuture.runAsync(storage, STORAGE_POOL)
-                .whenComplete((unused, th) -> {
-                    if (th != null) {
-                        C2MEStorageHandle.LOGGER.error("Storage {} crashed", storage, th);
-                    } else {
-                        C2MEStorageHandle.LOGGER.info("Storage {} finished execution", storage);
-                    }
-                });
+    public static void runStorage(C2MEStorageHandle handle) {
+        STORAGE_POOL.execute(new StorageWorker(handle));
     }
 
     public static Maybe<Either<NbtCompound, byte[]>> awaitVirtually(Supplier<NbtCompound> provider) {
-        return Maybe.just(provider).observeOn(VIRTUAL_SCHEDULER).map(Supplier::get).map(Either::left);
+        return Maybe.fromSupplier(() -> Either.<NbtCompound, byte[]>left(provider.get())).subscribeOn(VIRTUAL_SCHEDULER);
+    }
+
+    record StorageWorker(C2MEStorageHandle handle) implements Runnable {
+        @Override
+        public void run() {
+            handle.initCarrier();
+            handle.run();
+        }
     }
 }

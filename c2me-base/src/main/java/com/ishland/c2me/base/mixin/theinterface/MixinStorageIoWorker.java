@@ -4,6 +4,7 @@ import com.ibm.asyncutil.util.Either;
 import com.ishland.c2me.base.common.theinterface.IDirectStorage;
 import com.ishland.c2me.base.mixin.access.IRegionBasedStorage;
 import io.reactivex.rxjava3.core.Completable;
+import io.reactivex.rxjava3.core.Single;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.storage.RegionBasedStorage;
@@ -18,6 +19,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.SequencedMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 @Mixin(StorageIoWorker.class)
@@ -29,26 +31,38 @@ public abstract class MixinStorageIoWorker implements IDirectStorage {
 
     @Shadow @Final private RegionBasedStorage storage;
 
-    @Shadow
-    public abstract CompletableFuture<Void> setResult(ChunkPos pos, Supplier<NbtCompound> nbtSupplier);
-
     @Unique
-    private void c2me$setRawChunkData0(ChunkPos pos, byte[] data) throws IOException {
+    private CompletableFuture<?> c2me$setRawChunkData0(ChunkPos pos, Either<NbtCompound, byte[]> data) {
         StorageIoWorker.Result result = this.results.get(pos);
-        final RegionFile regionFile = ((IRegionBasedStorage) this.storage).invokeGetRegionFile(pos);
-        try (final DataOutputStream out = regionFile.getChunkOutputStream(pos)) {
-            out.write(data);
-        }
-        if (result != null) {
-            result.future.complete(null);
+        if (data.isLeft()) {
+            NbtCompound nbtCompound = data.left().get();
+            if (result == null) {
+                final var newResult = new StorageIoWorker.Result(nbtCompound);
+                this.results.put(pos, newResult);
+                return newResult.future;
+            } else {
+                result.nbt = nbtCompound;
+                return result.future;
+            }
+        } else {
+            try {
+                final RegionFile regionFile = ((IRegionBasedStorage) this.storage).invokeGetRegionFile(pos);
+                try (final DataOutputStream out = regionFile.getChunkOutputStream(pos)) {
+                    out.write(data.right().get());
+                }
+                if (result != null) {
+                    result.future.complete(null);
+                }
+                return CompletableFuture.completedFuture(null);
+            } catch (IOException e) {
+                // Do not fail future for result's future
+                return CompletableFuture.failedFuture(e);
+            }
         }
     }
 
     @Override
-    public Completable setRawChunkData(ChunkPos pos, Either<NbtCompound, byte[]> either) {
-        return either.fold(
-                compound -> Completable.fromCompletionStage(this.setResult(pos, () -> compound)),
-                data -> Completable.fromAction(() -> c2me$setRawChunkData0(pos, data))
-        );
+    public Completable setRawChunkData(ChunkPos pos, Single<Either<NbtCompound, byte[]>> single) {
+        return Completable.fromCompletionStage(this.run(() -> this.c2me$setRawChunkData0(pos, single.blockingGet())).thenCompose(Function.identity()));
     }
 }
