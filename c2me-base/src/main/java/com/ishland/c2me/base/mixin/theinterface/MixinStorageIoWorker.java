@@ -31,6 +31,9 @@ public abstract class MixinStorageIoWorker implements IDirectStorage {
 
     @Shadow @Final private RegionBasedStorage storage;
 
+    @Shadow
+    public abstract CompletableFuture<Void> setResult(ChunkPos pos, NbtCompound nbt);
+
     @Unique
     private CompletableFuture<?> c2me$setRawChunkData0(ChunkPos pos, Either<NbtCompound, byte[]> data) {
         StorageIoWorker.Result result = this.results.get(pos);
@@ -64,5 +67,10 @@ public abstract class MixinStorageIoWorker implements IDirectStorage {
     @Override
     public Completable setRawChunkData(ChunkPos pos, Single<Either<NbtCompound, byte[]>> single) {
         return Completable.fromCompletionStage(this.run(() -> this.c2me$setRawChunkData0(pos, single.blockingGet())).thenCompose(Function.identity()));
+    }
+
+    @Override
+    public Completable setRawChunkData(ChunkPos pos, Either<NbtCompound, byte[]> data) {
+        return Completable.fromCompletionStage(this.run(() -> this.c2me$setRawChunkData0(pos, data)).thenCompose(Function.identity()));
     }
 }

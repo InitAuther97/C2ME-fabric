@@ -37,7 +37,7 @@ public class C2MEStorageHandle implements Runnable, MessagePassingQueue.Consumer
 
     private Thread carrier;
     private final MessagePassingQueue<StorageRequest> pendingTasks;
-    private final boolean logThroughput;
+    //private final boolean logThroughput;
 
     // Cold fields that are only changed by worker thread
     private boolean closing = false;
@@ -69,9 +69,9 @@ public class C2MEStorageHandle implements Runnable, MessagePassingQueue.Consumer
         Preconditions.checkArgument(queue instanceof MessagePassingQueue<?>, "MPSC queue is not MessagePassingQueue");
         this.pendingTasks = (MessagePassingQueue<StorageRequest>) queue;
         this.storage = storage;
-        if (storage.getStorageKey().type().equals("chunk")) {
-            logThroughput = true;
-        } else logThroughput = false;
+        //if (storage.getStorageKey().type().equals("chunk")) {
+        //    logThroughput = true;
+        //} else logThroughput = false;
         this.ioExecutor = ioExecutor;
         this.prioritizedExecutor = prioritizedExecutor;
     }

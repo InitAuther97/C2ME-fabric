@@ -9,4 +9,5 @@ import net.minecraft.util.math.ChunkPos;
 public interface IDirectStorage {
 
     Completable setRawChunkData(ChunkPos pos, Single<Either<NbtCompound, byte[]>> data);
+    Completable setRawChunkData(ChunkPos pos, Either<NbtCompound, byte[]> data);
 }

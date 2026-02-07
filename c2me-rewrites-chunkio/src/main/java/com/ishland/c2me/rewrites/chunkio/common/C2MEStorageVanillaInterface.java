@@ -75,6 +75,15 @@ public class C2MEStorageVanillaInterface extends StorageIoWorker implements IDir
     }
 
     @Override
+    public Completable setRawChunkData(ChunkPos pos, Either<NbtCompound, byte[]> data) {
+        return Completable.create(emitter -> {
+            final var cache = new C2MEStorageHandle.DataCache(this.backend, data);
+            StorageRequest.WriteRequest request = new StorageRequest.WriteRequest(emitter, pos, cache);
+            this.backend.enqueue(request);
+        });
+    }
+
+    @Override
     public CompletableFuture<Optional<NbtCompound>> readChunkData(ChunkPos pos) {
         return Maybe.<NbtCompound>create(emitter -> this.backend.enqueue(new StorageRequest.ReadRequest(emitter, pos)))
                 .map(Optional::of).toCompletionStage(Optional.empty()).toCompletableFuture();
