@@ -2,7 +2,9 @@ package com.ishland.c2me.rewrites.chunkio.common;
 
 import com.google.common.base.Preconditions;
 import com.ibm.asyncutil.util.Either;
+import com.ishland.c2me.base.common.structs.RawByteArrayOutputStream;
 import com.ishland.c2me.base.mixin.access.IRegionBasedStorage;
+import com.ishland.c2me.base.mixin.access.IRegionFile;
 import io.reactivex.rxjava3.core.CompletableEmitter;
 import io.reactivex.rxjava3.core.MaybeEmitter;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -11,12 +13,14 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtSizeTracker;
 import net.minecraft.nbt.scanner.NbtScanner;
 import net.minecraft.util.math.ChunkPos;
+import net.minecraft.world.storage.ChunkCompressionFormat;
 import net.minecraft.world.storage.RegionFile;
 
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -214,6 +218,7 @@ public sealed interface StorageRequest {
         private final C2MEStorageHandle.DataCache cache;
         private Either<NbtCompound, byte[]> data;
         private DataOutputStream dos;
+        private RawByteArrayOutputStream baos;
         private byte state = 0;
 
         public WriteRequest(CompletableEmitter emitter, ChunkPos pos, C2MEStorageHandle.DataCache cache) {
@@ -250,7 +255,12 @@ public sealed interface StorageRequest {
                     return;
                 }
                 try {
-                    dos.close();
+                    final RegionFile regionFile = ((IRegionBasedStorage) worker.accessStorage()).invokeGetRegionFile(pos);
+                    ByteBuffer byteBuffer = baos.asByteBuffer();
+                    // C2MEStorageHandle.LOGGER.info("buffer size is {}", byteBuffer.limit());
+                    // TODO [VanillaCopy] RegionFile.ChunkBuffer
+                    byteBuffer.putInt(0, baos.size() - 5 + 1);
+                    ((IRegionFile) regionFile).invokeWriteChunk(pos, byteBuffer);
                 } catch (IOException e) {
                     final var storage = worker.accessStorage();
                     C2MEStorageHandle.LOGGER.warn("Failed to write chunk data for chunk {} in {}", pos, storage.getStorageKey(), e);
@@ -282,11 +292,28 @@ public sealed interface StorageRequest {
             }
             final RegionFile regionFile;
             final var storage = worker.accessStorage();
+            ChunkCompressionFormat compressionFormat;
+            {
+                try {
+                    regionFile = ((IRegionBasedStorage) storage).invokeGetRegionFile(pos);
+                    compressionFormat = ((IRegionFile) regionFile).getCompressionFormat();
+                } catch (Throwable t) {
+                    C2MEStorageHandle.LOGGER.warn("Failed to get compression format for chunk {} in {}", pos, worker, t);
+                    compressionFormat = ChunkCompressionFormat.getCurrentFormat();
+                }
+            }
             try {
-                regionFile = ((IRegionBasedStorage) storage).invokeGetRegionFile(pos);
-                dos = regionFile.getChunkOutputStream(pos);
-            } catch (IOException e) {
-                C2MEStorageHandle.LOGGER.warn("Failed to open data stream for writing chunk {} in {}", pos, storage.getStorageKey(), e);
+                final RawByteArrayOutputStream out = new RawByteArrayOutputStream(8096);
+                // TODO [VanillaCopy] RegionFile.ChunkBuffer
+                out.write(0);
+                out.write(0);
+                out.write(0);
+                out.write(0);
+                out.write(compressionFormat.getId());
+                this.baos = out;
+                this.dos = new DataOutputStream(compressionFormat.wrap(out));
+            } catch (Throwable t) {
+                C2MEStorageHandle.LOGGER.warn("Failed to wrap compression stream for chunk {} in {}", pos, worker, t);
                 return;
             }
             worker.io().execute(this);
@@ -306,6 +333,7 @@ public sealed interface StorageRequest {
                 } else {
                     this.dos.write(data.right().get());
                 }
+                this.dos.close();
             } catch (IOException e) {
                 C2MEStorageHandle.LOGGER.error("Failed to write chunk data for chunk {} in {}", pos, cache.handle.accessStorage().getStorageKey(), e);
             }
