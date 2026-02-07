@@ -37,6 +37,7 @@ public class C2MEStorageHandle implements Runnable, MessagePassingQueue.Consumer
 
     private Thread carrier;
     private final MessagePassingQueue<StorageRequest> pendingTasks;
+    private final boolean logThroughput;
 
     // Cold fields that are only changed by worker thread
     private boolean closing = false;
@@ -68,6 +69,9 @@ public class C2MEStorageHandle implements Runnable, MessagePassingQueue.Consumer
         Preconditions.checkArgument(queue instanceof MessagePassingQueue<?>, "MPSC queue is not MessagePassingQueue");
         this.pendingTasks = (MessagePassingQueue<StorageRequest>) queue;
         this.storage = storage;
+        if (storage.getStorageKey().type().equals("chunk")) {
+            logThroughput = true;
+        } else logThroughput = false;
         this.ioExecutor = ioExecutor;
         this.prioritizedExecutor = prioritizedExecutor;
     }
@@ -85,8 +89,11 @@ public class C2MEStorageHandle implements Runnable, MessagePassingQueue.Consumer
     @Override
     public void run() {
         try {
+            //int total = 0;
             while (!closing) {
                 if (0 >= (int) VH_COUNT.getVolatile(this)) {
+                    //if (logThroughput) LOGGER.info("Storage {} drain {}, cache size {}", this.storage.getStorageKey().dimension().getValue(), total, this.cache.size());
+                    //total = 0;
                     LockSupport.park(this);
                     if (Thread.interrupted()) {
                         LOGGER.warn("Ignored interruption when waiting for tasks");
@@ -94,6 +101,7 @@ public class C2MEStorageHandle implements Runnable, MessagePassingQueue.Consumer
                 }
                 final int count = pendingTasks.drain(this);
                 if (count == 0) continue;
+                //total += count;
                 VH_COUNT.getAndAddRelease(this, -count);
             }
             LOGGER.info("Storage {} finished execution", this);
@@ -106,8 +114,8 @@ public class C2MEStorageHandle implements Runnable, MessagePassingQueue.Consumer
     }
 
     public void enqueue(@NotNull StorageRequest pending) {
-        final int count = (int) VH_COUNT.getAndAddRelease(this, 1);
         pendingTasks.offer(pending);
+        final int count = (int) VH_COUNT.getAndAddAcquire(this, 1);
         if (count == 0) {
             LockSupport.unpark(carrier);
         }

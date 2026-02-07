@@ -65,11 +65,13 @@ public sealed interface StorageRequest {
                 final var cacheRead = worker.getCache(pos.toLong());
                 if (cacheRead == null) {
                     result = null;
-                } else if ((result = (this.cache = cacheRead).queueOrGet(this)) == null) {
+                } else if ((result = cacheRead.queueOrGet(this)) == null) {
+                    this.cache = cacheRead;
                     return;
                 }
             } else {
                 result = cache.getNow();
+                this.cache = null; // Release data cache
             }
             final Either<NbtCompound, byte[]> dataNow;
             if (result == null) {
@@ -101,6 +103,7 @@ public sealed interface StorageRequest {
                 }
             } else if (dataNow.isLeft()) {
                 callback.onSuccess(dataNow.left().get());
+                return;
             } else {
                 this.stream = new DataInputStream(new ByteArrayInputStream(dataNow.right().get()));
             }
@@ -147,11 +150,13 @@ public sealed interface StorageRequest {
                 final var cacheRead = worker.getCache(pos.toLong());
                 if (cacheRead == null) {
                     result = null;
-                } else if ((result = (this.cache = cacheRead).queueOrGet(this)) == null) {
+                } else if ((result = cacheRead.queueOrGet(this)) == null) {
+                    this.cache = cacheRead;
                     return;
                 }
             } else {
                 result = cache.getNow();
+                this.cache = null; // Release data cache
             }
             final Either<NbtCompound, byte[]> dataNow;
             if (result == null) {
