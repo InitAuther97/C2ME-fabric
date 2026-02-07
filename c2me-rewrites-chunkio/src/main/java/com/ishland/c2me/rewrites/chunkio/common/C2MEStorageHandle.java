@@ -195,6 +195,10 @@ public class C2MEStorageHandle implements Runnable, MessagePassingQueue.Consumer
         }
     }
 
+    public void join() throws InterruptedException {
+        this.carrier.join();
+    }
+
     public RegionBasedStorage accessStorage() {
         return this.storage;
     }

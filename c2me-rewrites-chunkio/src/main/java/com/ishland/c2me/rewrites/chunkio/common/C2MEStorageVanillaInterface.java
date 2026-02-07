@@ -111,7 +111,12 @@ public class C2MEStorageVanillaInterface extends StorageIoWorker implements IDir
         Completable.create(emitter -> {
             StorageRequest.FlushRequest request = new StorageRequest.FlushRequest(emitter, true); // Always sync
             this.backend.enqueue(request);
-        }).blockingSubscribe(this.backend::close, _ -> this.backend.close());
+        }).doOnEvent(_ -> this.backend.close()).subscribe();
+        try {
+            this.backend.join();
+        } catch (InterruptedException e) {
+            C2MEStorageHandle.LOGGER.warn("Interrupted while waiting for backend to close", e);
+        }
     }
 
     @Override
