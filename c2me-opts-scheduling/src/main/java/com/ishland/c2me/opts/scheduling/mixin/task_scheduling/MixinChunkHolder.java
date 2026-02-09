@@ -39,7 +39,7 @@ public abstract class MixinChunkHolder implements DuckChunkHolder {
 
     @Inject(method = "<init>", at = @At("RETURN"))
     private void onInit(ChunkPos pos, int level, HeightLimitView world, LightingProvider lightingProvider, ChunkHolder.LevelUpdateListener levelUpdateListener, ChunkHolder.PlayersWatchingChunkProvider playersWatchingChunkProvider, CallbackInfo ci) {
-        c2me$dirtyLightSections = new AtomicBitSet[LightType.values().length];
+        c2me$dirtyLightSections = new AtomicBitSet[LIGHT_TYPES.length];
         final int length = this.lightingProvider.getHeight() + 1;
         for (int i = 0; i < c2me$dirtyLightSections.length; i++) {
             c2me$dirtyLightSections[i] = AtomicBitSet.create(length);
