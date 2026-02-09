@@ -228,7 +228,9 @@ public class ReadFromDisk extends NewChunkStatus {
         } else {
             ChunkPos chunkPos = chunk.getPos();
 
-            SerializedChunk serializer = SerializedChunk.fromChunk(((IThreadedAnvilChunkStorage) context.tacs()).getWorld(), chunk);
+            SerializedChunk serializer = ScopedValue
+                    .where(ChunkState.UNLOADING, true)
+                    .call(() -> SerializedChunk.fromChunk(((IThreadedAnvilChunkStorage) context.tacs()).getWorld(), chunk));
             return Single
                     .<Either<NbtCompound, byte[]>>fromCallable(() -> {
                         try (var ignored = ThreadInstrumentation.getCurrent().begin(new ChunkTaskWork(context, this, false))) {

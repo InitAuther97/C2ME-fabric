@@ -27,8 +27,8 @@ configure(allprojects) {
     it.group = project.maven_group
     it.version = project.mod_version + "." + getVersionSuffix()
     java {
-        sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
+        sourceCompatibility = JavaVersion.VERSION_25
+        targetCompatibility = JavaVersion.VERSION_25
     }
 
     afterEvaluate {

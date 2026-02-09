@@ -11,6 +11,7 @@
     "MixinMinecraftServer",
     "MixinNoiseChunkGenerator",
     "MixinPointOfInterestStorage",
+    "MixinSerializedChunk",
     "MixinSerializingRegionBasedStorage",
     "MixinServerChunkManager",
     "MixinThreadedAnvilChunkStorage",
