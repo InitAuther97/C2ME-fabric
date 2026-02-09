@@ -6,14 +6,14 @@ public class BitSetUtil {
 
     /**
      * Perform a logical or and return if anything is changed.
+     * Note that the 'from' BitSet is consumed by this call.
      * @param origin The BitSet to set all bits to
      * @param from The BitSet to set all bits from
      * @return if any fresh bits are set in origin
      */
     public static boolean setAll(BitSet origin, BitSet from) {
-        BitSet check = (BitSet) from.clone();
-        check.andNot(origin);
-        if (check.isEmpty()) {
+        from.andNot(origin);
+        if (from.isEmpty()) {
             return false;
         }
         origin.or(from);

@@ -12,6 +12,7 @@ import net.minecraft.world.chunk.light.LightingProvider;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -47,7 +48,7 @@ public abstract class MixinChunkHolder implements DuckChunkHolder {
 
     @Override
     public boolean c2me$queueLightSectionDirty(LightType lightType, int sectionY) {
-        if (sectionY < this.lightingProvider.getBottomY() && sectionY > this.lightingProvider.getTopY()) return false;
+        if (sectionY < this.lightingProvider.getBottomY() || sectionY > this.lightingProvider.getTopY()) return false;
         this.c2me$dirtyLightSections[lightType.ordinal()].set(sectionY - this.lightingProvider.getBottomY());
         // We need to guarantee that:
         // 1) if we see false, then we need to schedule, and the scheduled undirty
@@ -61,13 +62,15 @@ public abstract class MixinChunkHolder implements DuckChunkHolder {
     public boolean c2me$undirtyLight() {
         if (!(boolean) VH_LIGHT_UNDIRTY.getAndSetAcquire(this, false)) {
             // Synchronize with queueLightSectionDirty
+            // This should probably never happen, but why not?
+            // TODO: Add logging for indication that this branch is reached
             return false;
         }
         boolean hasDirtyLight = false;
         AtomicBitSet[] sections = this.c2me$dirtyLightSections;
         final int bottomY = this.lightingProvider.getBottomY();
         for (int i = 0; i < sections.length; i++) {
-            LightType lightType = LightType.values()[i];
+            LightType lightType = LIGHT_TYPES[i];
             switch(lightType) {
                 case SKY -> hasDirtyLight |= BitSetUtil.setAll(this.skyLightUpdateBits, sections[i].getAllAndClear());
                 case BLOCK -> hasDirtyLight |= BitSetUtil.setAll(this.blockLightUpdateBits, sections[i].getAllAndClear());
@@ -85,7 +88,10 @@ public abstract class MixinChunkHolder implements DuckChunkHolder {
         return hasDirtyLight;
     }
 
+    @Unique
     private static final VarHandle VH_LIGHT_UNDIRTY;
+    @Unique
+    private static final LightType[] LIGHT_TYPES = LightType.values();
     static {
         try {
             VH_LIGHT_UNDIRTY = MethodHandles.lookup().findVarHandle(MixinChunkHolder.class, "c2me$scheduledLightUndirty", boolean.class);
