@@ -54,7 +54,6 @@ public class SchedulingManager {
                 if (locks.freed) continue retry;
                 locks.add(task);
             }
-            task.setPriority(this.getPriority(pos));
             task.addPostExec(() -> {
                 final FreeableTaskList tasks = this.pos2Tasks.get(task.getPos());
                 if (tasks != null) {
@@ -70,7 +69,7 @@ public class SchedulingManager {
                     }
                 }
             });
-            GlobalExecutors.prioritizedScheduler.schedule(task);
+            GlobalExecutors.prioritizedScheduler.schedule(task, this.getPriority(pos));
             return;
         }
     }
@@ -138,8 +137,7 @@ public class SchedulingManager {
             synchronized (locks) {
                 if (locks.freed) return;
                 for (AbstractPosAwarePrioritizedTask lock : locks) {
-                    lock.setPriority(priority);
-                    GlobalExecutors.prioritizedScheduler.notifyPriorityChange(lock);
+                    GlobalExecutors.prioritizedScheduler.changePriority(lock, priority);
                 }
             }
         }

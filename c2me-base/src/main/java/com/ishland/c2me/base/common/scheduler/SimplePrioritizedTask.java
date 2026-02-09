@@ -5,16 +5,14 @@ import com.ishland.flowsched.executor.Task;
 
 import java.util.Objects;
 
-public class SimplePrioritizedTask implements Task {
+public class SimplePrioritizedTask extends Task {
 
     private final Runnable task;
     private final LockToken[] lockTokens;
-    private final int priority;
 
-    public SimplePrioritizedTask(Runnable task, LockToken[] lockTokens, int priority) {
+    public SimplePrioritizedTask(Runnable task, LockToken[] lockTokens) {
         this.task = Objects.requireNonNull(task, "task");
         this.lockTokens = Objects.requireNonNull(lockTokens, "lockTokens");
-        this.priority = priority;
     }
 
     @Override
@@ -34,10 +32,5 @@ public class SimplePrioritizedTask implements Task {
     @Override
     public LockToken[] lockTokens() {
         return this.lockTokens;
-    }
-
-    @Override
-    public int priority() {
-        return this.priority;
     }
 }

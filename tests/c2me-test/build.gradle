@@ -14,12 +14,13 @@ loom {
                     "-Dc2me.base.config.override.vanillaWorldGenOptimizations.useDensityFunctionCompiler=true",
                     "-Dc2me.base.config.override.vanillaWorldGenOptimizations.nativeAcceleration.enabled=true",
                     "-Dc2me.gcFreeChunkSerializer.validateNbt=true",
-                    "-Dcom.ishland.c2me.mixin.doAudit=true"
+                    "-Dcom.ishland.c2me.mixin.doAudit=true",
+                    "-XX:+UseZGC", "-XX:+UseCompactObjectHeaders", "-XX:+AlwaysPreTouch", "-Xmx8G", "-Xms8G"
             if (System.getenv("GITHUB_WORKFLOW") != null) {
                 if (System.getenv("RUNNER_OS").equals("macOS")) {
                     vmArgs "-Xmx11G"
                 } else if (System.getenv("RUNNER_OS").equals("Linux")) {
-                    vmArgs "-Xmx5G"
+                    vmArgs "-Xmx8G", "-Xms8G"
                 }
             }
         }

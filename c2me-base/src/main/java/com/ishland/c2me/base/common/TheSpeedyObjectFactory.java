@@ -1,9 +1,10 @@
-package com.ishland.c2me.rewrites.chunksystem.common;
+package com.ishland.c2me.base.common;
 
 import com.ishland.flowsched.scheduler.ObjectFactory;
 import io.netty.util.internal.PlatformDependent;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 import org.jctools.queues.atomic.MpscAtomicArrayQueue;
+import org.jctools.queues.atomic.MpscUnboundedAtomicArrayQueue;
 import org.jctools.util.UnsafeAccess;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,6 +66,7 @@ public class TheSpeedyObjectFactory implements ObjectFactory {
 
     @Override
     public <E> Queue<E> newMPSCQueue() {
-        return this.hasUnsafe ? new MpscUnboundedArrayQueue<>(1024) : new MpscAtomicArrayQueue<>(1024);
+        // Hint: Must be MessagePassingQueue<E> from jctools
+        return this.hasUnsafe ? new MpscUnboundedArrayQueue<>(1024) : new MpscUnboundedAtomicArrayQueue<>(1024);
     }
 }

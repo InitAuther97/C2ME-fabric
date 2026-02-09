@@ -1,13 +1,15 @@
 package com.ishland.c2me.base.mixin.theinterface;
 
+import com.ibm.asyncutil.util.Either;
 import com.ishland.c2me.base.common.theinterface.IDirectStorage;
 import com.ishland.c2me.base.mixin.access.IRegionBasedStorage;
-import com.mojang.datafixers.util.Either;
+import io.reactivex.rxjava3.core.Completable;
+import io.reactivex.rxjava3.core.Single;
+import net.minecraft.nbt.NbtCompound;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.storage.RegionBasedStorage;
 import net.minecraft.world.storage.RegionFile;
 import net.minecraft.world.storage.StorageIoWorker;
-import org.jetbrains.annotations.NotNull;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -15,10 +17,8 @@ import org.spongepowered.asm.mixin.Unique;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.util.Map;
 import java.util.SequencedMap;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -31,30 +31,46 @@ public abstract class MixinStorageIoWorker implements IDirectStorage {
 
     @Shadow @Final private RegionBasedStorage storage;
 
-    @Override
-    public CompletableFuture<Void> setRawChunkData(ChunkPos pos, byte[] data) {
-        return this.run(() -> this.c2me$setRawChunkData0(pos, data)).thenCompose(Function.identity());
-    }
+    @Shadow
+    public abstract CompletableFuture<Void> setResult(ChunkPos pos, NbtCompound nbt);
 
     @Unique
-    private @NotNull CompletableFuture<Void> c2me$setRawChunkData0(ChunkPos pos, byte[] data) {
+    private CompletableFuture<?> c2me$setRawChunkData0(ChunkPos pos, Either<NbtCompound, byte[]> data) {
         StorageIoWorker.Result result = this.results.get(pos);
-        try {
-            final RegionFile regionFile = ((IRegionBasedStorage) (Object) this.storage).invokeGetRegionFile(pos);
-            try (final DataOutputStream out = regionFile.getChunkOutputStream(pos)) {
-                out.write(data);
+        if (data.isLeft()) {
+            NbtCompound nbtCompound = data.left().get();
+            if (result == null) {
+                final var newResult = new StorageIoWorker.Result(nbtCompound);
+                this.results.put(pos, newResult);
+                return newResult.future;
+            } else {
+                result.nbt = nbtCompound;
+                return result.future;
             }
-            if (result != null) {
-                result.future.complete(null);
+        } else {
+            try {
+                final RegionFile regionFile = ((IRegionBasedStorage) this.storage).invokeGetRegionFile(pos);
+                try (final DataOutputStream out = regionFile.getChunkOutputStream(pos)) {
+                    out.write(data.right().get());
+                }
+                if (result != null) {
+                    result.future.complete(null);
+                }
+                return CompletableFuture.completedFuture(null);
+            } catch (IOException e) {
+                // Do not fail future for result's future
+                return CompletableFuture.failedFuture(e);
             }
-        } catch (IOException e) {
-            return CompletableFuture.failedFuture(e);
         }
-        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public CompletableFuture<Void> setRawChunkData(ChunkPos pos, CompletableFuture<byte[]> data) {
-        return this.run(() -> this.c2me$setRawChunkData0(pos, data.toCompletableFuture().join())).thenCompose(Function.identity());
+    public Completable setRawChunkData(ChunkPos pos, Single<Either<NbtCompound, byte[]>> single) {
+        return Completable.fromCompletionStage(this.run(() -> this.c2me$setRawChunkData0(pos, single.blockingGet())).thenCompose(Function.identity()));
+    }
+
+    @Override
+    public Completable setRawChunkData(ChunkPos pos, Either<NbtCompound, byte[]> data) {
+        return Completable.fromCompletionStage(this.run(() -> this.c2me$setRawChunkData0(pos, data)).thenCompose(Function.identity()));
     }
 }

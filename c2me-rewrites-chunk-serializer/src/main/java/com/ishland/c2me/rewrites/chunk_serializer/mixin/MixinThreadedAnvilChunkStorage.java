@@ -1,5 +1,6 @@
 package com.ishland.c2me.rewrites.chunk_serializer.mixin;
 
+import com.ibm.asyncutil.util.Either;
 import com.ishland.c2me.base.common.scheduler.IVanillaChunkManager;
 import com.ishland.c2me.base.common.theinterface.IDirectStorage;
 import com.ishland.c2me.base.mixin.access.IChunkHolder;
@@ -8,7 +9,10 @@ import com.ishland.c2me.rewrites.chunk_serializer.common.ChunkDataSerializer;
 import com.ishland.c2me.rewrites.chunk_serializer.common.NbtWriter;
 import com.ishland.c2me.rewrites.chunk_serializer.common.utils.ValidationUtils;
 import com.mojang.datafixers.DataFixer;
+import io.reactivex.rxjava3.core.Single;
+import io.reactivex.rxjava3.schedulers.Schedulers;
 import net.minecraft.datafixer.DataFixTypes;
+import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtElement;
 import net.minecraft.server.world.ChunkHolder;
 import net.minecraft.server.world.ServerChunkLoadingManager;
@@ -96,7 +100,7 @@ public abstract class MixinThreadedAnvilChunkStorage extends VersionedChunkStora
             SerializedChunk chunkSerializer = SerializedChunk.fromChunk(this.world, chunk);
             //region start replaced code
             // NbtCompound nbtCompound = ChunkSerializer.serialize(this.world, chunk);
-            CompletableFuture<byte[]> serializationFuture = CompletableFuture.supplyAsync(() -> {
+            ((IDirectStorage) ((IVersionedChunkStorage) this).getWorker()).setRawChunkData(chunkPos, Single.fromCallable(() -> {
                 NbtWriter nbtWriter = new NbtWriter();
                 try {
                     nbtWriter.start(NbtElement.COMPOUND_TYPE);
@@ -104,24 +108,16 @@ public abstract class MixinThreadedAnvilChunkStorage extends VersionedChunkStora
                     nbtWriter.finishCompound();
                     byte[] byteArray = nbtWriter.toByteArray();
                     ValidationUtils.validateNbt(byteArray);
-                    return byteArray;
+                    return Either.<NbtCompound, byte[]>right(byteArray);
                 } finally {
                     nbtWriter.release();
                 }
-            }, ((IVanillaChunkManager) this).c2me$getSchedulingManager().positionedExecutor(chunk.getPos().toLong()));
-
-            CompletableFuture<Void> saveFuture = ((IDirectStorage) ((IVersionedChunkStorage) this).getWorker()).setRawChunkData(chunkPos, serializationFuture);
-
-            saveFuture.handle((void_, exceptionx) -> {
-                if (exceptionx != null) {
-                    this.world.getServer().onChunkSaveFailure(exceptionx, this.getStorageKey(), chunkPos);
-                }
-
-                this.chunksBeingSavedCount.decrementAndGet();
-                return null;
-            });
+            }).subscribeOn(Schedulers.from(((IVanillaChunkManager) this).c2me$getSchedulingManager().positionedExecutor(chunk.getPos().toLong()))))
+                    .subscribe(() -> this.chunksBeingSavedCount.decrementAndGet(), ex -> {
+                        this.world.getServer().onChunkSaveFailure(ex, this.getStorageKey(), chunkPos);
+                        this.chunksBeingSavedCount.decrementAndGet();
+                    });
             //endregion end replaced code
-
             this.mark(chunkPos, chunkStatus.getChunkType());
             return true;
         } catch (Exception var5) {

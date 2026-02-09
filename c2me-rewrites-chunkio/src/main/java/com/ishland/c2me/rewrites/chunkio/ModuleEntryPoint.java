@@ -9,4 +9,8 @@ public class ModuleEntryPoint {
             .comment("Whether to use the optimized implementation of IO system")
             .getBoolean(true, false);
 
+    public static final String backend = new ConfigSystem.ConfigAccessor()
+            .key("ioSystem.backend")
+            .comment("The IO system backend to use, available: thread, vthread")
+            .getString("thread", "thread");
 }

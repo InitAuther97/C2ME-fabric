@@ -5,23 +5,13 @@ import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 
 import java.util.Objects;
 
-public abstract class AbstractPosAwarePrioritizedTask implements Task {
+public abstract class AbstractPosAwarePrioritizedTask extends Task {
 
     protected final ReferenceArrayList<Runnable> postExec = new ReferenceArrayList<>(4);
     private final long pos;
-    private int priority = Integer.MAX_VALUE;
 
     public AbstractPosAwarePrioritizedTask(long pos) {
         this.pos = pos;
-    }
-
-    @Override
-    public int priority() {
-        return this.priority;
-    }
-
-    public void setPriority(int priority) {
-        this.priority = priority;
     }
 
     public long getPos() {
