@@ -4,10 +4,7 @@ import net.minecraft.world.LightType;
 
 public interface DuckChunkHolder {
 
-    void c2me$queueLightSectionDirty(LightType lightType, int sectionY);
-
-    boolean c2me$shouldScheduleUndirty();
+    boolean c2me$queueLightSectionDirty(LightType lightType, int sectionY);
 
     boolean c2me$undirtyLight();
-
 }

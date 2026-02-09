@@ -30,8 +30,8 @@ public abstract class MixinServerChunkManager {
     public void onLightUpdate(LightType type, ChunkSectionPos pos) {
         ChunkHolder chunkHolder = this.getChunkHolder(pos.toChunkPos().toLong()); // thread-safe
         if (chunkHolder != null) {
-            ((DuckChunkHolder) chunkHolder).c2me$queueLightSectionDirty(type, pos.getSectionY());
-            if (((DuckChunkHolder) chunkHolder).c2me$shouldScheduleUndirty()) {
+            final boolean needSchedule = ((DuckChunkHolder) chunkHolder).c2me$queueLightSectionDirty(type, pos.getSectionY());
+            if (needSchedule) {
                 this.mainThreadExecutor.execute(() -> {
                     if (((DuckChunkHolder) chunkHolder).c2me$undirtyLight()) {
                         this.chunksToBroadcastUpdate.add(chunkHolder);

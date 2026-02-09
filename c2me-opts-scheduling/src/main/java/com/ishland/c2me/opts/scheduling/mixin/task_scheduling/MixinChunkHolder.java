@@ -1,6 +1,9 @@
 package com.ishland.c2me.opts.scheduling.mixin.task_scheduling;
 
+import com.ishland.c2me.opts.scheduling.common.AtomicBitSet;
+import com.ishland.c2me.opts.scheduling.common.BitSetUtil;
 import com.ishland.c2me.opts.scheduling.common.DuckChunkHolder;
+import it.unimi.dsi.fastutil.ints.IntIterator;
 import net.minecraft.server.world.ChunkHolder;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.HeightLimitView;
@@ -13,8 +16,9 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.util.BitSet;
 
 @Mixin(ChunkHolder.class)
 public abstract class MixinChunkHolder implements DuckChunkHolder {
@@ -22,46 +26,71 @@ public abstract class MixinChunkHolder implements DuckChunkHolder {
     @Shadow public abstract boolean markForLightUpdate(LightType lightType, int y);
 
     @Shadow @Final private LightingProvider lightingProvider;
-    private AtomicIntegerArray[] c2me$dirtyLightSections;
-    private final AtomicBoolean c2me$scheduledLightUndirty = new AtomicBoolean(false);
+    @Shadow
+    @Final
+    private BitSet skyLightUpdateBits;
+    @Shadow
+    @Final
+    private BitSet blockLightUpdateBits;
+    private AtomicBitSet[] c2me$dirtyLightSections;
+    @SuppressWarnings("unused")
+    private volatile boolean c2me$scheduledLightUndirty;
 
     @Inject(method = "<init>", at = @At("RETURN"))
     private void onInit(ChunkPos pos, int level, HeightLimitView world, LightingProvider lightingProvider, ChunkHolder.LevelUpdateListener levelUpdateListener, ChunkHolder.PlayersWatchingChunkProvider playersWatchingChunkProvider, CallbackInfo ci) {
-        c2me$dirtyLightSections = new AtomicIntegerArray[LightType.values().length];
+        c2me$dirtyLightSections = new AtomicBitSet[LightType.values().length];
+        final int length = this.lightingProvider.getHeight() + 1;
         for (int i = 0; i < c2me$dirtyLightSections.length; i++) {
-            c2me$dirtyLightSections[i] = new AtomicIntegerArray(this.lightingProvider.getTopY() - this.lightingProvider.getBottomY() + 1);
+            c2me$dirtyLightSections[i] = AtomicBitSet.create(length);
         }
     }
 
     @Override
-    public void c2me$queueLightSectionDirty(LightType lightType, int sectionY) {
-        if (sectionY >= this.lightingProvider.getBottomY() && sectionY <= this.lightingProvider.getTopY())
-            this.c2me$dirtyLightSections[lightType.ordinal()].set(sectionY - this.lightingProvider.getBottomY(), 1);
-    }
-
-    @Override
-    public boolean c2me$shouldScheduleUndirty() {
-        return this.c2me$scheduledLightUndirty.compareAndSet(false, true);
+    public boolean c2me$queueLightSectionDirty(LightType lightType, int sectionY) {
+        if (sectionY < this.lightingProvider.getBottomY() && sectionY > this.lightingProvider.getTopY()) return false;
+        this.c2me$dirtyLightSections[lightType.ordinal()].set(sectionY - this.lightingProvider.getBottomY());
+        // We need to guarantee that:
+        // 1) if we see false, then we need to schedule, and the scheduled undirty
+        // action will see our change. Therefore, release is needed.
+        // 2) if we see true, then we don't need to schedule, and the undirty action
+        // to come will see our change. Therefore, release is needed.
+        return !(boolean) VH_LIGHT_UNDIRTY.getAndSetRelease(this, true);
     }
 
     @Override
     public boolean c2me$undirtyLight() {
-        if (!this.c2me$scheduledLightUndirty.compareAndSet(true, false)) {
+        if (!(boolean) VH_LIGHT_UNDIRTY.getAndSetAcquire(this, false)) {
+            // Synchronize with queueLightSectionDirty
             return false;
         }
         boolean hasDirtyLight = false;
-        AtomicIntegerArray[] me$dirtyLightSections = this.c2me$dirtyLightSections;
+        AtomicBitSet[] sections = this.c2me$dirtyLightSections;
         final int bottomY = this.lightingProvider.getBottomY();
-        for (int __i = 0, me$dirtyLightSectionsLength = me$dirtyLightSections.length; __i < me$dirtyLightSectionsLength; __i++) {
-            AtomicIntegerArray section = me$dirtyLightSections[__i];
-            LightType lightType = LightType.values()[__i];
-            for (int j = 0; j < section.length(); j++) {
-                if (section.compareAndSet(j, 1, 0)) {
-                    hasDirtyLight |= this.markForLightUpdate(lightType, j + bottomY);
+        for (int i = 0; i < sections.length; i++) {
+            LightType lightType = LightType.values()[i];
+            switch(lightType) {
+                case SKY -> hasDirtyLight |= BitSetUtil.setAll(this.skyLightUpdateBits, sections[i].getAllAndClear());
+                case BLOCK -> hasDirtyLight |= BitSetUtil.setAll(this.blockLightUpdateBits, sections[i].getAllAndClear());
+                default -> {
+                    // What if this is possible?
+                    hasDirtyLight = false;
+                    IntIterator section = sections[i].clearAndIterate();
+                    while (section.hasNext()) {
+                        int next = section.nextInt();
+                        hasDirtyLight |= this.markForLightUpdate(lightType, next + bottomY);
+                    }
                 }
             }
         }
         return hasDirtyLight;
     }
 
+    private static final VarHandle VH_LIGHT_UNDIRTY;
+    static {
+        try {
+            VH_LIGHT_UNDIRTY = MethodHandles.lookup().findVarHandle(MixinChunkHolder.class, "c2me$scheduledLightUndirty", boolean.class);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
 }
