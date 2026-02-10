@@ -3,6 +3,7 @@ name: C2ME Build Script
 on:
   push: {}
   pull_request: {}
+  workflow_dispatch: {}
 
 jobs:
   build:
@@ -38,15 +39,6 @@ jobs:
     - name: Build C2ME
       run: |
         ./gradlew clean build --stacktrace
-
-    - name: upload to modrinth and curseforge
-      run: ./gradlew modrinth publishMainPublicationToCurseForge
-      if: github.ref == 'refs/heads/dev/1.21.11'
-      env:
-        MODRINTH_TOKEN: ${{ secrets.MODRINTH_UPLOAD_TOKEN }}
-        CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
-        GITHUB_EVENT_RAW_PATH: ${{ github.event_path }}
-      continue-on-error: true
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
