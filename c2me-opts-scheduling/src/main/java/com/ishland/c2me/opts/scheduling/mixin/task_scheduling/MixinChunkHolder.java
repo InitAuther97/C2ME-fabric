@@ -55,12 +55,17 @@ public abstract class MixinChunkHolder implements DuckChunkHolder {
         // action will see our change. Therefore, release is needed.
         // 2) if we see true, then we don't need to schedule, and the undirty action
         // to come will see our change. Therefore, release is needed.
-        return !(boolean) VH_LIGHT_UNDIRTY.getAndSetRelease(this, true);
+
+        // InitAuther97: These are signature polymorphic which references the Mixin class after compilation. Force cast to ChunkHolder to avoid such thing.
+        // noinspection JavaLangInvokeHandleSignature
+        return !(boolean) VH_LIGHT_UNDIRTY.getAndSetRelease((ChunkHolder)(Object) this, true);
     }
 
     @Override
     public boolean c2me$undirtyLight() {
-        if (!(boolean) VH_LIGHT_UNDIRTY.getAndSetAcquire(this, false)) {
+        // InitAuther97: These are signature polymorphic which references the Mixin class after compilation. Force cast to ChunkHolder to avoid such thing.
+        // noinspection JavaLangInvokeHandleSignature
+        if (!(boolean) VH_LIGHT_UNDIRTY.getAndSetAcquire((ChunkHolder)(Object) this, false)) {
             // Synchronize with queueLightSectionDirty
             // This should probably never happen, but why not?
             // TODO: Add logging for indication that this branch is reached
@@ -71,10 +76,10 @@ public abstract class MixinChunkHolder implements DuckChunkHolder {
         final int bottomY = this.lightingProvider.getBottomY();
         for (int i = 0; i < sections.length; i++) {
             LightType lightType = LIGHT_TYPES[i];
-            switch(lightType) {
+            switch (lightType) {
                 case SKY -> hasDirtyLight |= BitSetUtil.setAll(this.skyLightUpdateBits, sections[i].getAllAndClear());
                 case BLOCK -> hasDirtyLight |= BitSetUtil.setAll(this.blockLightUpdateBits, sections[i].getAllAndClear());
-                default -> {
+                case null, default -> {
                     // What if this is possible?
                     hasDirtyLight = false;
                     IntIterator section = sections[i].clearAndIterate();
